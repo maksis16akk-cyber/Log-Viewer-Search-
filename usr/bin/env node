@@ -1,0 +1,121 @@
+#!/usr/bin/env node
+const fs = require('fs');
+const readline = require('readline');
+const { program } = require('commander');
+
+function highlight(line, pattern, regex) {
+    if (regex) {
+        return line.replace(new RegExp(pattern, 'g'), '\x1b[33m$&\x1b[0m');
+    }
+    return line.split(pattern).join('\x1b[33m' + pattern + '\x1b[0m');
+}
+
+function searchFiles(files, pattern, regex, ignoreCase, context, lineNumbers, countOnly, output) {
+    let totalMatches = 0;
+    const results = [];
+
+    files.forEach(filepath => {
+        if (!fs.existsSync(filepath)) {
+            console.error(`File not found: ${filepath}`);
+            return;
+        }
+        const content = fs.readFileSync(filepath, 'utf8');
+        const lines = content.split('\n').filter(line => line !== '');
+
+        let regexObj = null;
+        if (regex) {
+            try {
+                regexObj = new RegExp(pattern, ignoreCase ? 'i' : '');
+            } catch (e) {
+                console.error(`Regex error: ${e.message}`);
+                process.exit(1);
+            }
+        }
+
+        if (countOnly) {
+            let matchCount = 0;
+            lines.forEach(line => {
+                if (regex) {
+                    if (regexObj.test(line)) matchCount++;
+                } else {
+                    if (ignoreCase) {
+                        if (line.toLowerCase().includes(pattern.toLowerCase())) matchCount++;
+                    } else {
+                        if (line.includes(pattern)) matchCount++;
+                    }
+                }
+            });
+            totalMatches += matchCount;
+            results.push(`${filepath}: ${matchCount}`);
+            return;
+        }
+
+        // Find matches
+        const matchedIndices = [];
+        lines.forEach((line, idx) => {
+            if (regex) {
+                if (regexObj.test(line)) matchedIndices.push(idx);
+            } else {
+                if (ignoreCase) {
+                    if (line.toLowerCase().includes(pattern.toLowerCase())) matchedIndices.push(idx);
+                } else {
+                    if (line.includes(pattern)) matchedIndices.push(idx);
+                }
+            }
+        });
+
+        if (context > 0) {
+            const shown = new Set();
+            matchedIndices.forEach(idx => {
+                for (let offset = -context; offset <= context; offset++) {
+                    const n = idx + offset;
+                    if (n >= 0 && n < lines.length) shown.add(n);
+                }
+            });
+            shown.forEach(idx => {
+                let prefix = ' ';
+                if (matchedIndices.includes(idx)) prefix = '>';
+                let line = lines[idx];
+                if (prefix === '>') {
+                    line = highlight(line, pattern, regex);
+                }
+                const prefixStr = lineNumbers ? `${filepath}:${String(idx+1).padStart(4)}: ` : `${filepath}: `;
+                results.push(prefixStr + line);
+            });
+            totalMatches += matchedIndices.length;
+        } else {
+            matchedIndices.forEach(idx => {
+                let line = lines[idx];
+                line = highlight(line, pattern, regex);
+                const prefixStr = lineNumbers ? `${filepath}:${String(idx+1).padStart(4)}: ` : `${filepath}: `;
+                results.push(prefixStr + line);
+            });
+            totalMatches += matchedIndices.length;
+        }
+    });
+
+    if (output) {
+        fs.writeFileSync(output, results.join('\n') + '\n');
+        if (!countOnly) fs.appendFileSync(output, `\nTotal matches: ${totalMatches}\n`);
+        console.log(`Results written to ${output}`);
+    } else {
+        results.forEach(r => console.log(r));
+        if (!countOnly) console.log(`\nTotal matches: ${totalMatches}`);
+    }
+}
+
+program
+    .argument('<pattern>', 'Search pattern')
+    .argument('<files...>', 'Log files to search')
+    .option('--regex', 'Treat pattern as regex')
+    .option('--ignore-case', 'Case-insensitive search')
+    .option('--context <n>', 'Show N lines of context', parseInt)
+    .option('--line-numbers', 'Show line numbers')
+    .option('--count', 'Show match count only')
+    .option('--output <file>', 'Write results to a file')
+    .action((pattern, files, options) => {
+        searchFiles(files, pattern, options.regex, options.ignoreCase,
+                    options.context || 0, options.lineNumbers, options.count, options.output);
+    });
+
+program.parse(process.argv);
